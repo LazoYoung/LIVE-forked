@@ -2,7 +2,9 @@
 Here are some use cases:
 python main.py --config config/all.yaml --experiment experiment_8x1 --signature demo1 --target data/demo1.png
 """
-import pydiffvg
+
+# import pydiffvg
+import diffvg_mod as diffvg
 import torch
 import cv2
 import matplotlib.pyplot as plt
@@ -31,7 +33,7 @@ import yaml
 from easydict import EasyDict as edict
 
 
-pydiffvg.set_print_timing(False)
+# diffvg.set_print_timing(True)
 gamma = 1.0
 
 ##########
@@ -99,6 +101,7 @@ def parse_args():
     parser.add_argument('--signature', nargs='+', type=str)
     parser.add_argument('--seginit', nargs='+', type=str)
     parser.add_argument("--num_segments", type=int, default=4)
+    parser.add_argument("--cpu", type=bool, default=False)
     # parser.add_argument("--num_paths", type=str, default="1,1,1")
     # parser.add_argument("--num_iter", type=int, default=500)
     # parser.add_argument('--free', action='store_true')
@@ -122,6 +125,7 @@ def parse_args():
     cfg.signature = args.signature
     # set cfg num_segments in command
     cfg.num_segments = args.num_segments
+    cfg.cpu = args.cpu
     if args.seginit is not None:
         cfg.seginit = edict()
         cfg.seginit.type = args.seginit[0]
@@ -282,7 +286,7 @@ def init_shapes(num_paths,
                 radius=radius, segments=num_segments,
                 bias=center)
 
-        path = pydiffvg.Path(num_control_points = torch.LongTensor(num_control_points),
+        path = diffvg.Path(num_control_points = torch.LongTensor(num_control_points),
                              points = points,
                              stroke_width = torch.tensor(0.0),
                              is_closed = True)
@@ -300,7 +304,7 @@ def init_shapes(num_paths,
             fill_color_init = torch.FloatTensor(npr.uniform(size=[4]))
             stroke_color_init = torch.FloatTensor(npr.uniform(size=[4]))
 
-        path_group = pydiffvg.ShapeGroup(
+        path_group = diffvg.ShapeGroup(
             shape_ids = torch.LongTensor([shape_cnt+i]),
             fill_color = fill_color_init,
             stroke_color = stroke_color_init,
@@ -367,9 +371,12 @@ if __name__ == "__main__":
     with open(osp.join(configfile), 'w') as f:
         yaml.dump(edict_2_dict(cfg), f)
 
-    # Use GPU if available
-    pydiffvg.set_use_gpu(torch.cuda.is_available())
-    device = pydiffvg.get_device()
+    if cfg.cpu:
+        diffvg.set_use_gpu(False)
+    else:
+        diffvg.set_use_gpu(torch.cuda.is_available())
+
+    device = diffvg.get_device()
 
     gt = np.array(PIL.Image.open(cfg.target))
     print(f"Input image shape is: {gt.shape}")
@@ -391,7 +398,7 @@ if __name__ == "__main__":
         random.seed(cfg.seed)
         npr.seed(cfg.seed)
         torch.manual_seed(cfg.seed)
-    render = pydiffvg.RenderFunction.apply
+    render = diffvg.RenderFunction.apply
 
     shapes_record, shape_groups_record = [], []
 
@@ -465,7 +472,7 @@ if __name__ == "__main__":
                 cfg.experiment_dir, "svg-init",
                 "{}-init.svg".format(pathn_record_str))
             check_and_create_dir(filename)
-            pydiffvg.save_svg(
+            diffvg.save_svg(
                 filename, w, h,
                 shapes_record, shape_groups_record)
 
@@ -497,8 +504,12 @@ if __name__ == "__main__":
                 optim.zero_grad()
 
             # Forward pass: render the image.
-            scene_args = pydiffvg.RenderFunction.serialize_scene(
-                w, h, shapes_record, shape_groups_record)
+            scene_args = diffvg.RenderFunction.serialize_scene(
+                w, h, shapes_record, shape_groups_record,
+                # Improves performance but it won't help GPU bottleneck
+                # todo - so why not make it configurable?
+                use_prefiltering=True,
+            )
             img = render(w, h, 2, 2, t, None, *scene_args)
 
             # Compose img with white background
@@ -515,7 +526,7 @@ if __name__ == "__main__":
                         img, format='[2D x 3]', reverse=True).detach().cpu()
                 else:
                     imshow = img.detach().cpu()
-                pydiffvg.imwrite(imshow, filename, gamma=gamma)
+                diffvg.imwrite(imshow, filename, gamma=gamma)
 
             x = img.unsqueeze(0).permute(0, 3, 1, 2) # HWC -> NCHW
 
@@ -523,6 +534,7 @@ if __name__ == "__main__":
                 color_reweight = torch.FloatTensor([255/219, 255/224, 255/255]).to(device)
                 loss = ((x-gt)*(color_reweight.view(1, -1, 1, 1)))**2
             else:
+                # x imposes huge computation cost, possibly due to rendering img
                 loss = ((x-gt)**2)
 
             if cfg.loss.use_l1_loss:
@@ -539,7 +551,7 @@ if __name__ == "__main__":
                     sgi.fill_color = torch.FloatTensor([1, 1, 1, 1]).to(device)
                     sgi.shape_ids = torch.LongTensor([sg_idx]).to(device)
 
-                sargs_forsdf = pydiffvg.RenderFunction.serialize_scene(
+                sargs_forsdf = diffvg.RenderFunction.serialize_scene(
                     w, h, shapes_forsdf, shape_groups_forsdf)
                 with torch.no_grad():
                     im_forsdf = render(w, h, 2, 2, 0, None, *sargs_forsdf)
@@ -630,13 +642,13 @@ if __name__ == "__main__":
                     img, format='[2D x 3]', reverse=True).detach().cpu()
             else:
                 imshow = img.detach().cpu()
-            pydiffvg.imwrite(imshow, filename, gamma=gamma)
+            diffvg.imwrite(imshow, filename, gamma=gamma)
 
         if cfg.save.output:
             filename = os.path.join(
                 cfg.experiment_dir, "output-svg", "{}.svg".format(pathn_record_str))
             check_and_create_dir(filename)
-            pydiffvg.save_svg(filename, w, h, shapes_record, shape_groups_record)
+            diffvg.save_svg(filename, w, h, shapes_record, shape_groups_record)
 
         loss_matrix.append(loss_list)
 

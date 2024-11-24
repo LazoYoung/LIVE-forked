@@ -1,0 +1,4 @@
+build/
+cmake-build-debug/
+diffvg.egg-info/
+dist/

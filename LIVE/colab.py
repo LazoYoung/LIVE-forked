@@ -99,6 +99,7 @@ def parse_args():
     parser.add_argument('--signature', nargs='+', type=str)
     parser.add_argument('--seginit', nargs='+', type=str)
     parser.add_argument("--num_segments", type=int, default=4)
+    parser.add_argument("--cpu", type=bool, default=False)
     # parser.add_argument("--num_paths", type=str, default="1,1,1")
     # parser.add_argument("--num_iter", type=int, default=500)
     # parser.add_argument('--free', action='store_true')
@@ -122,6 +123,7 @@ def parse_args():
     cfg.signature = args.signature
     # set cfg num_segments in command
     cfg.num_segments = args.num_segments
+    cfg.cpu = args.cpu
     if args.seginit is not None:
         cfg.seginit = edict()
         cfg.seginit.type = args.seginit[0]
@@ -367,8 +369,11 @@ if __name__ == "__main__":
     with open(osp.join(configfile), 'w') as f:
         yaml.dump(edict_2_dict(cfg), f)
 
-    # Use GPU if available
-    pydiffvg.set_use_gpu(torch.cuda.is_available())
+    if cfg.cpu:
+        pydiffvg.set_use_gpu(False)
+    else:
+        pydiffvg.set_use_gpu(torch.cuda.is_available())
+
     device = pydiffvg.get_device()
 
     gt = np.array(PIL.Image.open(cfg.target))
