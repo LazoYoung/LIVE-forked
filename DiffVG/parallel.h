@@ -43,6 +43,18 @@ __global__ void parallel_for_device_kernel(T functor, int count) {
     }
     functor(idx);
 }
+template <typename T, typename S>
+__global__ void parallel_for_device_kernel_shared(T functor, S *shared_ptr, int count) {
+    extern __shared__ __align__(sizeof(S)) unsigned char shared_mem[];
+//    S *shared_ptr = reinterpret_cast<S*>(shared_mem);
+    auto idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= count) {
+        return;
+    }
+    functor(shared_ptr);
+    __syncthreads();
+    functor(idx, shared_ptr);
+}
 template <typename T>
 inline void parallel_for_device(T functor,
                                 int count,
@@ -88,4 +100,20 @@ inline void parallel_for(T functor,
             }
         }, num_threads);
     }
+}
+
+template <typename T, typename S /* shared memory type */>
+inline void parallel_for_shared(T functor,
+                                int count,
+                                S *shared_ptr,
+                                int n_shared,
+                                int work_per_thread = -1) {
+#ifdef __CUDACC__
+    auto block_size = work_per_thread;
+    auto block_count = idiv_ceil(count, block_size);
+    parallel_for_device_kernel_shared<T, S><<<block_count, block_size, n_shared * sizeof(S)>>>(functor, shared_ptr, count);
+#else
+    throw std::runtime_error("diffvg not compiled with GPU");
+    assert(false);
+#endif
 }

@@ -776,6 +776,7 @@ float sample_distance(const SceneData &scene,
 
 // Gather d_color from d_image inside the filter kernel, normalize by
 // weight_image.
+// latency no factor
 DEVICE
 Vector4f gather_d_color(const Filter &filter,
                         const float *d_color_image,
@@ -1159,7 +1160,12 @@ struct weight_kernel {
 
 // We use a "mega kernel" for rendering
 struct render_kernel {
-    DEVICE void operator()(int idx) {
+    // shared memory init
+    DEVICE void operator()(float *d_filter_radius) {
+        *d_filter_radius = scene.d_filter->radius;
+    }
+    // parallel rendering
+    DEVICE void operator()(int idx, float *d_filter_radius /* shared */) {
         // height * width * num_samples_y * num_samples_x
         auto pt = Vector2f{0, 0};
         auto x = 0;
@@ -1224,6 +1230,8 @@ struct render_kernel {
             auto radius = scene.filter->radius;
             assert(radius >= 0);
             auto ri = (int)ceil(radius);
+
+            // todo - this loop imposes significant latency
             for (int dy = -ri; dy <= ri; dy++) {
                 for (int dx = -ri; dx <= ri; dx++) {
                     auto xx = x + dx;
@@ -1260,11 +1268,20 @@ struct render_kernel {
                                 (dot(d_pixel, color) * weight_sum -
                                  filter_weight * dot(d_pixel, color) * (weight_sum - filter_weight)) /
                                 square(weight_sum);
-                            d_compute_filter_weight(*scene.filter,
-                                                    xc - pt.x,
-                                                    yc - pt.y,
-                                                    d_weight,
-                                                    scene.d_filter);
+
+                            // dummy code
+//                            atomic_add(d_render_image[4 * (yy * width + xx) + 0], 0.01f); // good
+//                            atomic_add(scene.d_filter->radius, 0.01f);  // bad
+                            atomic_add(d_filter_radius, 0.01f);
+
+                            // high computational load.
+                            // shared memory didn't help much.
+                            // todo - what about reduction
+//                            d_compute_filter_weight(*scene.filter,
+//                                                    xc - pt.x,
+//                                                    yc - pt.y,
+//                                                    d_weight,
+//                                                    scene.d_filter);
                         }
                     }
                 }
@@ -1502,13 +1519,26 @@ void render(std::shared_ptr<Scene> scene,
     parallel_init();
 
     float *weight_image = nullptr;
+//    float* d_filter_radius = nullptr;
+//    float* h_filter_radius = (float*)malloc(sizeof(float));
+//    SceneData sd = get_scene_data(*scene.get());
+//    printf("is filter available: %d\n", (sd.filter != nullptr));
+//    printf("is d_filter available: %d\n", (sd.d_filter != nullptr));
+//    printf("%.1f\n", scene->get_d_filter_radius());
+//    *h_filter_radius = sd.d_filter->radius;
+//    printf("%.1f\n", *h_filter_radius);
+
     // Allocate and zero the weight image
+    // also allocate d_filter_radius
     if (scene->use_gpu) {
 #ifdef __CUDACC__
         if (eval_positions.get() == nullptr) {
             checkCuda(cudaMallocManaged(&weight_image, width * height * sizeof(float)));
             cudaMemset(weight_image, 0, width * height * sizeof(float));
         }
+
+//        checkCuda(cudaMallocManaged(&d_filter_radius, sizeof(float)));
+//        checkCuda(cudaMemcpy(d_filter_radius, h_filter_radius, sizeof(float), cudaMemcpyHostToDevice));
 #else
         assert(false);
 #endif
@@ -1533,26 +1563,42 @@ void render(std::shared_ptr<Scene> scene,
             }, width * height * num_samples_x * num_samples_y, scene->use_gpu);
         }
 
+        // todo - cause overhead to cudaFree() call from pt_autograd_0 process
         auto num_samples = eval_positions.get() == nullptr ?
             width * height * num_samples_x * num_samples_y : num_eval_positions;
-        parallel_for(render_kernel{
-            get_scene_data(*scene.get()),
-            background_image.get(),
-            render_image.get(),
-            weight_image,
-            render_sdf.get(),
-            d_background_image.get(),
-            d_render_image.get(),
-            d_render_sdf.get(),
-            d_translation.get(),
-            width,
-            height,
-            num_samples_x,
-            num_samples_y,
-            seed,
-            use_prefiltering,
-            eval_positions.get()
-        }, num_samples, scene->use_gpu);
+
+        if (scene->use_gpu) {
+            #ifdef __NVCC__
+            float *shared_ptr;  // d_filter->radius
+            cudaMallocManaged(&shared_ptr, sizeof(float));
+            parallel_for_shared(render_kernel{
+                get_scene_data(*scene.get()),
+                background_image.get(),
+                render_image.get(),
+                weight_image,
+                render_sdf.get(),
+                d_background_image.get(),
+                d_render_image.get(),
+                d_render_sdf.get(),
+                d_translation.get(),
+                width,
+                height,
+                num_samples_x,
+                num_samples_y,
+                seed,
+                use_prefiltering,
+                eval_positions.get(),
+            }, num_samples, shared_ptr, 1, scene->use_gpu);
+            cudaFree(shared_ptr);
+            #else
+            throw std::runtime_error("diffvg not compiled with GPU");
+            assert(false);
+            #endif
+        } else {
+            // todo not implemented
+            throw std::runtime_error("diffvg not compiled with GPU");
+            assert(false);
+        }
     }
 
     // Boundary sampling
@@ -1581,9 +1627,10 @@ void render(std::shared_ptr<Scene> scene,
             morton_codes = (uint32_t*)malloc(
                 num_samples * sizeof(uint32_t));
         }
-        
+
         // Edge sampling
         // We sort the boundary samples for better thread coherency
+        // Repeat for every pixel times num_samples_x and y
         parallel_for(sample_boundary_kernel{
             get_scene_data(*scene.get()),
             seed,

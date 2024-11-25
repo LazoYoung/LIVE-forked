@@ -54,6 +54,9 @@ void d_compute_filter_weight(const Filter &filter,
                              float dy,
                              float d_return,
                              DFilter *d_filter) {
+  // todo - even this dummy code is heavy
+//  atomic_add(d_filter->radius, 0.01f);
+
     if (filter.type == FilterType::Box) {
         // return 1.f / square(2 * filter.radius);
         atomic_add(d_filter->radius,

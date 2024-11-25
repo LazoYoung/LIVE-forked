@@ -703,15 +703,15 @@ class RenderFunction(torch.autograd.Function):
                       num_samples_y,
                       seed,
 
-                      # diffvg.float_ptr(d_background_image.data_ptr() if background_image is not None else 0),
-                      diffvg.float_ptr(0), # d_background_image
+                      diffvg.float_ptr(d_background_image.data_ptr() if background_image is not None else 0),
+                      # diffvg.float_ptr(0), # d_background_image
 
                       # todo - significant overhead to DiffVG/diffvg.cpp
                       diffvg.float_ptr(grad_img.data_ptr() if output_type == OutputType.color else 0),
                       # diffvg.float_ptr(0), # d_render_image
 
-                      # diffvg.float_ptr(grad_img.data_ptr() if output_type == OutputType.sdf else 0),
-                      diffvg.float_ptr(0), # d_render_sdf
+                      diffvg.float_ptr(grad_img.data_ptr() if output_type == OutputType.sdf else 0),
+                      # diffvg.float_ptr(0), # d_render_sdf
 
                       diffvg.float_ptr(0), # d_translation
                       use_prefiltering,
