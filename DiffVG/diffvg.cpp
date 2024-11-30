@@ -1,3 +1,6 @@
+#define THRUST_IGNORE_DEPRECATED_CPP_DIALECT
+#define CUB_IGNORE_DEPRECATED_CPP_DIALECT
+
 #include "diffvg.h"
 #include "aabb.h"
 #include "shape.h"
@@ -13,6 +16,7 @@
 #include "pcg.h"
 #include "ptr.h"
 #include "scene.h"
+#include "timer.h"
 #include "vector.h"
 #include "winding_number.h"
 #include "within_distance.h"
@@ -1160,12 +1164,15 @@ struct weight_kernel {
 
 // We use a "mega kernel" for rendering
 struct render_kernel {
-    // shared memory init
-    DEVICE void operator()(float *d_filter_radius) {
-        *d_filter_radius = scene.d_filter->radius;
+    DEVICE void operator()(int idx) {
+        render(idx, nullptr);
     }
-    // parallel rendering
-    DEVICE void operator()(int idx, float *d_filter_radius /* shared */) {
+
+    DEVICE void operator()(int idx, DFilter *d_filter /* shared */) {
+        render(idx, d_filter);
+    }
+
+    DEVICE void render(int idx, DFilter *d_filter) {
         // height * width * num_samples_y * num_samples_x
         auto pt = Vector2f{0, 0};
         auto x = 0;
@@ -1272,16 +1279,18 @@ struct render_kernel {
                             // dummy code
 //                            atomic_add(d_render_image[4 * (yy * width + xx) + 0], 0.01f); // good
 //                            atomic_add(scene.d_filter->radius, 0.01f);  // bad
-                            atomic_add(d_filter_radius, 0.01f);
+//                            atomic_add(d_filter_radius, 0.01f);
 
                             // high computational load.
                             // shared memory didn't help much.
                             // todo - what about reduction
-//                            d_compute_filter_weight(*scene.filter,
-//                                                    xc - pt.x,
-//                                                    yc - pt.y,
-//                                                    d_weight,
-//                                                    scene.d_filter);
+                            d_compute_filter_weight(
+                                *scene.filter,
+                                xc - pt.x,
+                                yc - pt.y,
+                                d_weight,
+                                (d_filter != nullptr) ? d_filter : scene.d_filter
+                            );
                         }
                     }
                 }
@@ -1298,7 +1307,7 @@ struct render_kernel {
             }
             auto weight = eval_positions == nullptr ? 1.f / num_samples : 1.f;
             auto dist = sample_distance(scene, npt, weight,
-                d_sdf_image != nullptr ? &d_dist : nullptr, 
+                d_sdf_image != nullptr ? &d_dist : nullptr,
                 d_translation != nullptr ? &d_translation[2 * (y * width + x)] : nullptr);
             if (sdf_image != nullptr) {
                 if (eval_positions == nullptr) {
@@ -1567,37 +1576,59 @@ void render(std::shared_ptr<Scene> scene,
         auto num_samples = eval_positions.get() == nullptr ?
             width * height * num_samples_x * num_samples_y : num_eval_positions;
 
+        auto kernel = render_kernel{
+            get_scene_data(*scene.get()),
+            background_image.get(),
+            render_image.get(),
+            weight_image,
+            render_sdf.get(),
+            d_background_image.get(),
+            d_render_image.get(),
+            d_render_sdf.get(),
+            d_translation.get(),
+            width,
+            height,
+            num_samples_x,
+            num_samples_y,
+            seed,
+            use_prefiltering,
+            eval_positions.get(),
+        };
+
         if (scene->use_gpu) {
             #ifdef __NVCC__
-            float *shared_ptr;  // d_filter->radius
-            cudaMallocManaged(&shared_ptr, sizeof(float));
-            parallel_for_shared(render_kernel{
-                get_scene_data(*scene.get()),
-                background_image.get(),
-                render_image.get(),
-                weight_image,
-                render_sdf.get(),
-                d_background_image.get(),
-                d_render_image.get(),
-                d_render_sdf.get(),
-                d_translation.get(),
-                width,
-                height,
-                num_samples_x,
-                num_samples_y,
-                seed,
-                use_prefiltering,
-                eval_positions.get(),
-            }, num_samples, shared_ptr, 1, scene->use_gpu);
-            cudaFree(shared_ptr);
+            if (d_render_image.get() != nullptr) {
+                DFilter host;
+                DFilter *shared_ptr = nullptr;
+                DFilter *origin = scene.get()->d_filter;
+
+                auto send_time = measure([&]() {
+                    checkCuda(cudaMallocManaged(&shared_ptr, sizeof(DFilter)));
+                    checkCuda(cudaMemcpy(&host, origin, sizeof(DFilter), cudaMemcpyDeviceToHost));
+                    checkCuda(cudaMemcpy(shared_ptr, origin, sizeof(DFilter), cudaMemcpyDeviceToDevice));
+                });
+                printf("Time to send memory: %.1fms\n", send_time);
+
+                parallel_for_shared(kernel, num_samples, shared_ptr, 1, scene->use_gpu);
+                cudaDeviceSynchronize();
+
+                auto retrieve_time = measure([&]() {
+                    checkCuda(cudaMemcpy(&host, shared_ptr, sizeof(DFilter), cudaMemcpyDeviceToHost));
+                    checkCuda(cudaMemcpy(origin, shared_ptr, sizeof(DFilter), cudaMemcpyDeviceToDevice));
+                    checkCuda(cudaFree(shared_ptr));
+                });
+                printf("Time to retrieve memory: %.1fms\n", retrieve_time);
+//                printf("DFilter radius: %.4f\n", host.radius);
+            } else {
+                parallel_for(kernel, num_samples, true);
+            }
+
             #else
             throw std::runtime_error("diffvg not compiled with GPU");
             assert(false);
             #endif
         } else {
-            // todo not implemented
-            throw std::runtime_error("diffvg not compiled with GPU");
-            assert(false);
+            parallel_for(kernel, num_samples, false);
         }
     }
 

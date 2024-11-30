@@ -33,7 +33,7 @@ import yaml
 from easydict import EasyDict as edict
 
 
-# diffvg.set_print_timing(True)
+diffvg.set_print_timing(True)
 gamma = 1.0
 
 ##########

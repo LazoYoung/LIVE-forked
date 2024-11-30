@@ -371,7 +371,7 @@ class RenderFunction(torch.autograd.Function):
         time_elapsed = time.time() - start
         global print_timing
         if print_timing:
-            print('Scene construction, time: %.5f s' % time_elapsed)
+            print('Scene construction, time: %.1f ms' % (time_elapsed * 1000))
 
         if output_type == OutputType.color:
             assert(eval_positions.shape[0] == 0)
@@ -414,7 +414,8 @@ class RenderFunction(torch.autograd.Function):
         assert(torch.isfinite(rendered_image).all())
         time_elapsed = time.time() - start
         if print_timing:
-            print('Forward pass, time: %.5f s' % time_elapsed)
+            print('Forward pass, time: %.1f ms' % (time_elapsed * 1000))
+            print('num_eval_position: %d\n' % eval_positions.shape[0])
 
         ctx.scene = scene
         ctx.background_image = background_image
@@ -664,7 +665,8 @@ class RenderFunction(torch.autograd.Function):
                       eval_positions.shape[0])
         time_elapsed = time.time() - start
         if print_timing:
-            print('Gradient pass, time: %.5f s' % time_elapsed)
+            print('Gradient pass, time: %.1f ms' % (time_elapsed * 1000))
+            print('num_eval_position: %d\n' % eval_positions.shape[0])
         assert(torch.isfinite(translation_grad_image).all())
 
         return translation_grad_image
@@ -720,7 +722,8 @@ class RenderFunction(torch.autograd.Function):
         time_elapsed = time.time() - start
         global print_timing
         if print_timing:
-            print('Backward pass, time: %.5f s' % time_elapsed)
+            print('Backward pass, time: %.1f ms' % (time_elapsed * 1000))
+            print('num_eval_position: %d\n' % eval_positions.shape[0])
 
         d_args = []
         d_args.append(None) # width

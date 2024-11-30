@@ -41,6 +41,11 @@ static inline DEVICE double atomicAdd(double *address, double val) {
 
     DEVICE
     inline
+    float atomic_add(int &target, int source) {
+        return atomic_add_(target, source);
+    }
+    DEVICE
+    inline
     float atomic_add(float &target, float source) {
         return atomic_add_(target, source);
     }

@@ -67,6 +67,7 @@ set(SRCS atomic.h
          scene.h
          shape.h
          solve.h
+         timer.h
          vector.h
          within_distance.h
          winding_number.h

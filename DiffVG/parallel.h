@@ -51,8 +51,6 @@ __global__ void parallel_for_device_kernel_shared(T functor, S *shared_ptr, int 
     if (idx >= count) {
         return;
     }
-    functor(shared_ptr);
-    __syncthreads();
     functor(idx, shared_ptr);
 }
 template <typename T>
